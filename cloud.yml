@@ -1,0 +1,10 @@
+# Configuración Reflex Cloud — https://build.reflex.dev/
+# Después de crear el proyecto en el panel, pegá acá el ID (sidebar → Project → Settings):
+# project: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+
+name: polleria-gestion
+description: La Fábrica del Pollo — gestión integral (POS, inventario, finanzas)
+envfile: .env
+vmtype: c1m1
+regions:
+  - sjc
