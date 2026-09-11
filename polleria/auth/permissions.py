@@ -10,15 +10,15 @@ VENDEDOR = "vendedor"
 
 # Cada permiso lista los roles que lo tienen. El admin tiene todos implícitamente.
 _PERMISSIONS: dict[str, frozenset[str]] = {
-    "dashboard": frozenset({ADMIN, SUPERVISOR, VENDEDOR}),
+    "dashboard": frozenset({ADMIN, SUPERVISOR}),
     "pos": frozenset({ADMIN, SUPERVISOR, VENDEDOR}),
-    "sales.view_own": frozenset({ADMIN, SUPERVISOR, VENDEDOR}),
+    "sales.view_own": frozenset({ADMIN, SUPERVISOR}),
     "sales.view_all": frozenset({ADMIN, SUPERVISOR}),
-    "products.view": frozenset({ADMIN, SUPERVISOR, VENDEDOR}),
+    "products.view": frozenset({ADMIN, SUPERVISOR}),
     "products.manage": frozenset({ADMIN}),
     "inventory.view": frozenset({ADMIN, SUPERVISOR}),
     "inventory.manage": frozenset({ADMIN}),
-    "expenses.manage": frozenset({ADMIN, SUPERVISOR}),
+    "expenses.manage": frozenset({ADMIN, SUPERVISOR, VENDEDOR}),
     "purchases.view": frozenset({ADMIN, SUPERVISOR}),
     "purchases.manage": frozenset({ADMIN}),
     "sellers.view": frozenset({ADMIN, SUPERVISOR}),
@@ -26,8 +26,9 @@ _PERMISSIONS: dict[str, frozenset[str]] = {
     "reports.view": frozenset({ADMIN, SUPERVISOR}),
     "users.manage": frozenset({ADMIN}),
     "settings.manage": frozenset({ADMIN}),
-    "cash.close": frozenset({ADMIN, SUPERVISOR, VENDEDOR}),
+    "cash.close": frozenset({ADMIN, SUPERVISOR}),
     "profits.view": frozenset({ADMIN, SUPERVISOR}),
+    "records.delete": frozenset({ADMIN}),
 }
 
 

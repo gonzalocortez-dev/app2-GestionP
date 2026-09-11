@@ -8,22 +8,32 @@ import reflex as rx
 from sqlmodel import select
 
 from polleria.auth.state import AuthState
-from polleria.constants import PAYMENT_METHODS
+from polleria.constants import BRANCHES
 from polleria.models import Product, User
 from polleria.schemas import CartItem, ProductRow
 from polleria.services.core import BusinessError, DatabaseUnavailable, PermissionDenied
+from polleria.services.deletes import delete_sale
 from polleria.services.sales import create_detailed_sale, create_quick_sale
+from polleria.services.stock import stock_estado, stocks_by_product
 from polleria.utils.money import money, parse_amount, round_money
 from polleria.utils.time import iso_date, now_ar, parse_date, start_of_day
 
 
-def _product_row(p: Product) -> ProductRow:
-    estado = p.stock_estado
+def _product_row(
+    p: Product,
+    *,
+    qty: float | None = None,
+    by_branch: dict[str, float] | None = None,
+) -> ProductRow:
+    stock_val = float(p.stock or 0) if qty is None else float(qty or 0)
+    estado = stock_estado(stock_val, p.stock_minimo)
     labels = {
         "stock_normal": "Stock normal",
         "stock_bajo": "Stock bajo",
         "sin_stock": "Sin stock",
     }
+    branches = by_branch or {}
+    fmt = lambda n: str(round(float(n or 0), 3)).replace(".", ",")
     return ProductRow(
         id=p.id or 0,
         nombre=p.nombre,
@@ -34,10 +44,13 @@ def _product_row(p: Product) -> ProductRow:
         precio_fmt=money(p.precio_venta),
         costo=p.costo,
         costo_fmt=money(p.costo),
-        stock=p.stock,
-        stock_fmt=str(p.stock).replace(".", ","),
+        stock=stock_val,
+        stock_fmt=fmt(stock_val),
+        stock_b1=fmt(branches.get(BRANCHES[0], 0)),
+        stock_b2=fmt(branches.get(BRANCHES[1], 0) if len(BRANCHES) > 1 else 0),
+        stock_b3=fmt(branches.get(BRANCHES[2], 0) if len(BRANCHES) > 2 else 0),
         stock_minimo=p.stock_minimo,
-        valor_fmt=money(p.valor_inventario),
+        valor_fmt=money(round(stock_val * (p.costo or 0), 2)),
         estado=estado,
         estado_label=labels[estado],
         activo=p.activo,
@@ -48,11 +61,12 @@ class POSState(AuthState):
     mode: str = "detallada"
     search: str = ""
     qty_input: str = "1"
-    discount_input: str = "0"
+    sale_amount: str = ""
     metodo_pago: str = "Efectivo"
     observacion: str = ""
     quick_amount: str = ""
     sale_date: str = ""
+    sucursal: str = ""
 
     seller_label: str = ""
     seller_id: int = 0
@@ -63,9 +77,11 @@ class POSState(AuthState):
     cart: list[CartItem] = []
 
     show_confirm: bool = False
+    last_sale_id: int = 0
     last_numero: str = ""
     last_total: str = ""
     last_vendedor: str = ""
+    last_sucursal: str = ""
     last_pago: str = ""
     last_fecha: str = ""
 
@@ -86,41 +102,15 @@ class POSState(AuthState):
         ]
 
     @rx.var(cache=True)
-    def subtotal(self) -> float:
-        return round_money(sum(i.subtotal for i in self.cart))
-
-    @rx.var(cache=True)
-    def descuento(self) -> float:
-        value = parse_amount(self.discount_input)
-        return min(value, self.subtotal)
-
-    @rx.var(cache=True)
-    def total(self) -> float:
-        return round_money(self.subtotal - self.descuento)
-
-    @rx.var(cache=True)
-    def subtotal_fmt(self) -> str:
-        return money(self.subtotal)
-
-    @rx.var(cache=True)
-    def descuento_fmt(self) -> str:
-        return money(self.descuento)
-
-    @rx.var(cache=True)
-    def total_fmt(self) -> str:
-        return money(self.total)
-
-    @rx.var(cache=True)
     def cart_count(self) -> int:
         return len(self.cart)
 
     @rx.event
     def on_load(self):
-        self._bootstrap()
-        if not self.is_authenticated:
-            return rx.redirect("/login")
+        if redir := self._redirect_guest():
+            return redir
         if not self._has("pos"):
-            return rx.redirect("/")
+            return self._home_redirect()
         self.sale_date = iso_date()
         self._load_sellers()
         self._load_products()
@@ -153,7 +143,21 @@ class POSState(AuthState):
             rows = db.exec(
                 select(Product).where(Product.activo == True).order_by(Product.nombre)  # noqa: E712
             ).all()
-        self.products = [_product_row(p) for p in rows]
+            by_product = stocks_by_product(db, [p.id or 0 for p in rows])
+        branch = self.sucursal.strip()
+        self.products = [
+            _product_row(
+                p,
+                qty=by_product.get(p.id or 0, {}).get(branch, 0) if branch else 0,
+                by_branch=by_product.get(p.id or 0),
+            )
+            for p in rows
+        ]
+
+    @rx.event
+    def set_sucursal(self, value: str):
+        self.sucursal = "" if value in {"", "Seleccioná sucursal"} else value
+        self._load_products()
 
     @rx.event
     def set_mode(self, mode: str):
@@ -171,6 +175,8 @@ class POSState(AuthState):
 
     @rx.event
     def add_product(self, product_id: int):
+        if not self.sucursal.strip():
+            return rx.toast.error("Seleccioná la sucursal antes de armar el carrito.")
         qty = parse_amount(self.qty_input)
         if qty <= 0:
             return rx.toast.error("La cantidad debe ser positiva.")
@@ -178,6 +184,12 @@ class POSState(AuthState):
         if product is None:
             return rx.toast.error("Producto no encontrado.")
         existing = [i for i in self.cart if i.product_id == product_id]
+        already = existing[0].cantidad if existing else 0
+        if product.stock + 0.0001 < already + qty:
+            return rx.toast.error(
+                f"Stock insuficiente de {product.nombre} en {self.sucursal}. "
+                f"Disponible: {product.stock_fmt}"
+            )
         if existing:
             item = existing[0]
             item.cantidad = round_money(item.cantidad + qty)
@@ -226,7 +238,7 @@ class POSState(AuthState):
     @rx.event
     def clear_cart(self):
         self.cart = []
-        self.discount_input = "0"
+        self.sale_amount = ""
         self.observacion = ""
         self.quick_amount = ""
 
@@ -239,6 +251,8 @@ class POSState(AuthState):
     def confirm_sale(self):
         if self.seller_id <= 0:
             return rx.toast.error("Seleccioná un vendedor.")
+        if not self.sucursal.strip():
+            return rx.toast.error("Seleccioná en qué sucursal estás trabajando.")
         try:
             with rx.session() as db:
                 if self.mode == "rapida":
@@ -250,6 +264,7 @@ class POSState(AuthState):
                         vendedor_id=self.seller_id,
                         importe=importe,
                         metodo_pago=self.metodo_pago,
+                        sucursal=self.sucursal,
                         observacion=self.observacion,
                         fecha=self._sale_when(),
                     )
@@ -268,7 +283,8 @@ class POSState(AuthState):
                             for i in self.cart
                         ],
                         metodo_pago=self.metodo_pago,
-                        descuento=self.descuento,
+                        sucursal=self.sucursal,
+                        total_cobrado=parse_amount(self.sale_amount),
                         observacion=self.observacion,
                         fecha=self._sale_when(),
                     )
@@ -277,14 +293,16 @@ class POSState(AuthState):
         except Exception:
             return rx.toast.error("No se pudo registrar la venta. No se descontó stock.")
 
+        self.last_sale_id = sale.id or 0
         self.last_numero = f"#{sale.id:05d}"
         self.last_total = money(sale.total)
         self.last_vendedor = self.seller_label.split(" · ", 1)[-1]
+        self.last_sucursal = sale.sucursal
         self.last_pago = sale.metodo_pago
         self.last_fecha = now_ar().strftime("%d/%m/%Y %H:%M")
         self.show_confirm = True
         self.cart = []
-        self.discount_input = "0"
+        self.sale_amount = ""
         self.observacion = ""
         self.quick_amount = ""
         self._load_products()
@@ -293,3 +311,22 @@ class POSState(AuthState):
     @rx.event
     def close_confirm(self):
         self.show_confirm = False
+
+    @rx.event
+    def delete_last_sale(self):
+        if self.last_sale_id <= 0:
+            return rx.toast.error("No hay una venta reciente para eliminar.")
+        try:
+            with rx.session() as db:
+                delete_sale(
+                    db,
+                    actor_id=self.authenticated_user.id,
+                    actor_role=self.authenticated_user.role,
+                    sale_id=self.last_sale_id,
+                )
+        except (BusinessError, PermissionDenied) as exc:
+            return rx.toast.error(str(exc))
+        self.last_sale_id = 0
+        self.show_confirm = False
+        self._load_products()
+        return rx.toast.success("Venta eliminada")

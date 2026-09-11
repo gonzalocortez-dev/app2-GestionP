@@ -1,10 +1,14 @@
 # Configuración Reflex Cloud — https://build.reflex.dev/
-# Después de crear el proyecto en el panel, pegá acá el ID (sidebar → Project → Settings):
-# project: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+project: 5ef1c2cf-e6eb-4be6-a5ad-2f40e7090d6e
 
-name: polleria-gestion
+name: polleria
 description: La Fábrica del Pollo — gestión integral (POS, inventario, finanzas)
-envfile: .env
+# Secrets de producción (Supabase). NUNCA uses .env local (localhost).
+envfile: .env.supabase
 vmtype: c1m1
+# Mantener al menos 1 instancia encendida (evita el sleep de ~5 min).
+min_instances: 1
+# SQLite incluido de Cloud NO persiste. La app usa PostgreSQL vía DATABASE_URL.
+include_db: false
 regions:
-  - sjc
+  sjc: 1

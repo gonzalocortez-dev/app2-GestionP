@@ -26,15 +26,19 @@ def create_detailed_sale(
     vendedor_id: int,
     items: list[dict],
     metodo_pago: str,
-    descuento: float = 0.0,
+    sucursal: str,
+    total_cobrado: float,
     observacion: str = "",
     fecha: datetime | None = None,
 ) -> Sale:
     require_perm(actor_role, "pos")
     if not items:
         raise BusinessError("Agregá al menos un producto.")
-    if descuento < 0:
-        raise BusinessError("El descuento no puede ser negativo.")
+    branch = (sucursal or "").strip()
+    if not branch:
+        raise BusinessError("Seleccioná la sucursal.")
+    if total_cobrado <= 0:
+        raise BusinessError("Ingresá el precio de la venta.")
 
     vendedor = db.get(User, vendedor_id)
     if vendedor is None or not vendedor.activo:
@@ -69,19 +73,16 @@ def create_detailed_sale(
             )
         )
 
-    if descuento > subtotal:
-        raise BusinessError("El descuento no puede ser mayor al subtotal.")
-
-    total = round_money(subtotal - descuento)
+    total = round_money(total_cobrado)
     costo_total = round_money(costo_total)
-    ganancia = round_money(total - costo_total) if costo_total > 0 else round_money(total - costo_total)
+    ganancia = round_money(total - costo_total)
 
     sale = Sale(
         vendedor_id=vendedor_id,
         created_by=actor_id,
         fecha=when,
         subtotal=round_money(subtotal),
-        descuento=round_money(descuento),
+        descuento=0,
         total=total,
         costo_total=costo_total,
         ganancia=ganancia,
@@ -89,6 +90,7 @@ def create_detailed_sale(
         is_quick=False,
         metodo_pago=metodo_pago,
         estado="completada",
+        sucursal=branch,
         observacion=observacion,
     )
     db.add(sale)
@@ -106,6 +108,7 @@ def create_detailed_sale(
             usuario_id=actor_id,
             motivo="Venta",
             referencia=f"venta:{sale.id}",
+            sucursal=branch,
             fecha=when,
         )
 
@@ -130,12 +133,16 @@ def create_quick_sale(
     vendedor_id: int,
     importe: float,
     metodo_pago: str,
+    sucursal: str,
     observacion: str = "",
     fecha: datetime | None = None,
 ) -> Sale:
     require_perm(actor_role, "pos")
     if importe <= 0:
         raise BusinessError("El importe debe ser mayor a cero.")
+    branch = (sucursal or "").strip()
+    if not branch:
+        raise BusinessError("Seleccioná la sucursal.")
     vendedor = db.get(User, vendedor_id)
     if vendedor is None or not vendedor.activo:
         raise BusinessError("Seleccioná un vendedor activo.")
@@ -154,6 +161,7 @@ def create_quick_sale(
         is_quick=True,
         metodo_pago=metodo_pago,
         estado="completada",
+        sucursal=branch,
         observacion=observacion,
     )
     db.add(sale)

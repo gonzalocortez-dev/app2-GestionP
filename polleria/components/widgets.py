@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import reflex as rx
 
+from polleria.auth.state import AuthState
+
 
 def kpi_card(title: str, value, icon: str, accent: str = "orange", hint: str | None = None) -> rx.Component:
     return rx.card(
@@ -87,6 +89,20 @@ def status_badge(estado: rx.Var | str) -> rx.Component:
         ("stock_bajo", rx.badge("Stock bajo", color_scheme="amber", variant="soft")),
         ("sin_stock", rx.badge("Sin stock", color_scheme="red", variant="soft")),
         rx.badge(estado, variant="soft"),
+    )
+
+
+def delete_button(on_click) -> rx.Component:
+    return rx.cond(
+        AuthState.can_delete_records,
+        rx.button(
+            "Eliminar",
+            size="1",
+            variant="soft",
+            color_scheme="red",
+            on_click=on_click,
+        ),
+        rx.fragment(),
     )
 
 

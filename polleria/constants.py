@@ -22,6 +22,29 @@ PAYMENT_METHODS = (
     "Otro",
 )
 
+BRANCHES = (
+    "La Fábrica del Pollo",
+    "La 23",
+    "Don Juliano",
+)
+
+# Contenido fijo de una caja de pollo de 20 kg. No se edita desde la UI.
+CHICKEN_BOX_CUTS: tuple[tuple[str, float], ...] = (
+    ("Patamuslo", 7.615),
+    ("Alitas", 3.240),
+    ("Pechuga", 6.040),
+    ("Menudo", 1.530),
+    ("Puchero", 1.430),
+)
+CHICKEN_BOX_COUNTS = tuple(str(n) for n in range(1, 11))
+CHICKEN_CUT_ALIASES: dict[str, frozenset[str]] = {
+    "Patamuslo": frozenset({"patamuslo", "pata muslo", "pata y muslo"}),
+    "Alitas": frozenset({"alitas", "alita"}),
+    "Pechuga": frozenset({"pechuga"}),
+    "Menudo": frozenset({"menudo", "menudos", "menudencias"}),
+    "Puchero": frozenset({"puchero"}),
+}
+
 PRODUCT_CATEGORIES = (
     "Pollo",
     "Cortes",

@@ -32,7 +32,7 @@ class DashboardState(AuthState):
 
     series: list[dict[str, Any]] = []
     payments: list[dict[str, Any]] = []
-    sellers: list[dict[str, Any]] = []
+    branches: list[dict[str, Any]] = []
     ranking: list[RankRow] = []
 
     @rx.var(cache=True)
@@ -45,9 +45,10 @@ class DashboardState(AuthState):
 
     @rx.event
     def on_load(self):
-        self._bootstrap()
-        if not self.is_authenticated:
-            return rx.redirect("/login")
+        if redir := self._redirect_guest():
+            return redir
+        if not self._has("dashboard"):
+            return self._home_redirect()
         self.custom_start = iso_date(today_ar())
         self.custom_end = iso_date(today_ar())
         self.refresh()
@@ -87,7 +88,7 @@ class DashboardState(AuthState):
                 self.hay_ventas_rapidas = kpis["hay_ventas_rapidas"]
                 self.series = queries.sales_by_day(db, start, end)
                 self.payments = queries.sales_by_payment(db, start, end)
-                self.sellers = queries.sales_by_seller(db, start, end)
+                self.branches = queries.sales_by_branch(db, start, end)
                 self.ranking = [RankRow(**p) for p in queries.top_products(db, start, end)]
         except Exception as exc:
             self.loading = False

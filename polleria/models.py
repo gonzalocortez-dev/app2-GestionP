@@ -117,6 +117,17 @@ class Product(rx.Model, table=True):
         return "stock_normal"
 
 
+class BranchStock(rx.Model, table=True):
+    __tablename__ = "branch_stocks"
+    __table_args__ = (
+        sa.UniqueConstraint("product_id", "sucursal", name="uq_branch_stock"),
+    )
+
+    product_id: int = Field(foreign_key="products.id", index=True)
+    sucursal: str = Field(index=True)
+    cantidad: float = 0.0
+
+
 class Sale(rx.Model, table=True):
     __tablename__ = "sales"
 
@@ -134,6 +145,7 @@ class Sale(rx.Model, table=True):
     is_quick: bool = False
     metodo_pago: str = Field(default="Efectivo", index=True)
     estado: str = Field(default="completada", index=True)
+    sucursal: str = Field(default="", index=True)
     observacion: str = ""
     created_at: datetime | None = Field(default=None, sa_column=_ts())
 
@@ -169,6 +181,7 @@ class Purchase(rx.Model, table=True):
     )
     total: float = 0.0
     usuario_id: int = Field(foreign_key="users.id", index=True)
+    sucursal: str = Field(default="", index=True)
     registrar_gasto: bool = True
     observaciones: str = ""
     created_at: datetime | None = Field(default=None, sa_column=_ts())
@@ -194,6 +207,7 @@ class Expense(rx.Model, table=True):
         sa_column=sa.Column(sa.DateTime(timezone=True), nullable=False, index=True)
     )
     metodo_pago: str = Field(default="Efectivo")
+    sucursal: str = Field(default="", index=True)
     usuario_id: int = Field(foreign_key="users.id", index=True)
     observaciones: str = ""
     purchase_id: int | None = Field(default=None, foreign_key="purchases.id")
@@ -212,6 +226,7 @@ class InventoryMovement(rx.Model, table=True):
         sa_column=sa.Column(sa.DateTime(timezone=True), nullable=False, index=True)
     )
     referencia: str = ""
+    sucursal: str = Field(default="", index=True)
 
 
 class CashRegisterClosure(rx.Model, table=True):
@@ -228,6 +243,8 @@ class CashRegisterClosure(rx.Model, table=True):
     total_transferencias: float = 0.0
     total_tarjetas: float = 0.0
     total_mercadopago: float = 0.0
+    total_gastos: float = 0.0
+    ganancia_neta: float = 0.0
     cantidad_operaciones: int = 0
     observaciones: str = ""
     created_at: datetime | None = Field(default=None, sa_column=_ts())

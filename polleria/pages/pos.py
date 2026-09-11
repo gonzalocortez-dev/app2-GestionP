@@ -5,8 +5,9 @@ from __future__ import annotations
 import reflex as rx
 
 from polleria.components.layout import app_shell
-from polleria.components.widgets import empty_state
-from polleria.constants import PAYMENT_METHODS
+from polleria.auth.state import AuthState
+from polleria.components.widgets import empty_state, labeled_select
+from polleria.constants import BRANCHES, PAYMENT_METHODS
 from polleria.states.pos import POSState
 
 
@@ -23,12 +24,11 @@ def _product_card(product) -> rx.Component:
             rx.hstack(
                 rx.heading(product.precio_fmt, size="5", color=rx.color("orange", 11)),
                 rx.spacer(),
-                rx.text(f"Stock {product.stock_fmt}", size="1", color=rx.color("slate", 10)),
+                rx.text(f"Stock local {product.stock_fmt}", size="1", color=rx.color("slate", 10)),
                 width="100%",
             ),
             rx.button(
                 "Agregar",
-                on_click=POSState.add_product(product.id),
                 size="3",
                 width="100%",
                 height="44px",
@@ -49,7 +49,6 @@ def _cart_row(item) -> rx.Component:
     return rx.hstack(
         rx.vstack(
             rx.text(item.nombre, weight="medium", size="2"),
-            rx.text(item.precio_fmt, size="1", color=rx.color("slate", 10)),
             spacing="0",
             align="start",
         ),
@@ -69,7 +68,6 @@ def _cart_row(item) -> rx.Component:
             ),
             spacing="1",
         ),
-        rx.text(item.subtotal_fmt, weight="bold", min_width="5.5rem", text_align="right"),
         rx.icon_button(
             rx.icon("trash-2", size=16),
             size="2",
@@ -105,24 +103,20 @@ def cart_panel() -> rx.Component:
                 empty_state("Tocá un producto para agregarlo", "shopping-cart"),
             ),
             rx.divider(),
-            rx.hstack(rx.text("Subtotal"), rx.spacer(), rx.text(POSState.subtotal_fmt), width="100%"),
             rx.hstack(
-                rx.text("Descuento"),
+                rx.heading("TOTAL", size="4"),
                 rx.input(
-                    value=POSState.discount_input,
-                    on_change=POSState.set_discount_input,
-                    width="120px",
-                    size="2",
+                    placeholder="Precio de la venta",
+                    value=POSState.sale_amount,
+                    on_change=POSState.set_sale_amount,
+                    size="3",
+                    width="160px",
+                    height="48px",
                     text_align="right",
                 ),
                 width="100%",
                 justify="between",
-            ),
-            rx.hstack(
-                rx.heading("TOTAL", size="4"),
-                rx.spacer(),
-                rx.heading(POSState.total_fmt, size="6", color=rx.color("orange", 11)),
-                width="100%",
+                align="center",
             ),
             rx.select(
                 list(PAYMENT_METHODS),
@@ -180,7 +174,7 @@ def quick_panel() -> rx.Component:
                 width="100%",
             ),
             rx.input(
-                placeholder="Observación",
+                placeholder="Qué se vendió (ej. pollo entero)",
                 value=POSState.observacion,
                 on_change=POSState.set_observacion,
                 size="3",
@@ -210,12 +204,29 @@ def confirm_dialog() -> rx.Component:
                 rx.heading(POSState.last_total, size="8", color=rx.color("orange", 11)),
                 rx.text(f"Operación {POSState.last_numero}"),
                 rx.text(f"Vendedor: {POSState.last_vendedor}"),
+                rx.text(f"Sucursal: {POSState.last_sucursal}"),
                 rx.text(f"Pago: {POSState.last_pago}"),
                 rx.text(f"Fecha: {POSState.last_fecha}"),
                 spacing="2",
             ),
-            rx.dialog.close(
-                rx.button("Nueva venta", on_click=POSState.close_confirm, size="3", width="100%"),
+            rx.vstack(
+                rx.dialog.close(
+                    rx.button("Nueva venta", on_click=POSState.close_confirm, size="3", width="100%"),
+                ),
+                rx.cond(
+                    AuthState.can_delete_records,
+                    rx.button(
+                        "Eliminar esta venta",
+                        on_click=POSState.delete_last_sale,
+                        variant="soft",
+                        color_scheme="red",
+                        size="3",
+                        width="100%",
+                    ),
+                    rx.fragment(),
+                ),
+                spacing="2",
+                width="100%",
             ),
             max_width="420px",
         ),
@@ -248,18 +259,45 @@ def pos_page() -> rx.Component:
                 rx.hstack(
                     rx.cond(
                         POSState.seller_locked,
-                        rx.badge(POSState.seller_label, size="3", color_scheme="orange"),
-                        rx.select(
+                        rx.vstack(
+                            rx.text("Empleado", size="2", weight="medium", color=rx.color("slate", 12)),
+                            rx.badge(POSState.seller_label, size="3", color_scheme="orange"),
+                            spacing="1",
+                            align="start",
+                            width="100%",
+                        ),
+                        labeled_select(
+                            "Empleado",
                             POSState.seller_options,
                             value=POSState.seller_label,
                             on_change=POSState.set_seller_label,
+                        ),
+                    ),
+                    labeled_select(
+                        "Sucursal",
+                        ["Seleccioná sucursal", *BRANCHES],
+                        value=rx.cond(
+                            POSState.sucursal != "",
+                            POSState.sucursal,
+                            "Seleccioná sucursal",
+                        ),
+                        on_change=POSState.set_sucursal,
+                    ),
+                    rx.vstack(
+                        rx.text("Fecha", size="2", weight="medium", color=rx.color("slate", 12)),
+                        rx.input(
+                            type="date",
+                            value=POSState.sale_date,
+                            on_change=POSState.set_sale_date,
                             size="3",
                             width="100%",
                         ),
+                        spacing="1",
+                        align="start",
                     ),
-                    rx.input(type="date", value=POSState.sale_date, on_change=POSState.set_sale_date, size="3"),
                     width="100%",
                     spacing="2",
+                    align="end",
                     wrap="wrap",
                 ),
                 rx.cond(

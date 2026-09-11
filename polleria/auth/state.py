@@ -10,7 +10,7 @@ from sqlmodel import select
 
 from polleria.auth.permissions import has_permission
 from polleria.constants import APP_NAME
-from polleria.database import ensure_schema, migrate_plain_passwords, migrate_schema
+from polleria.database import init_db
 from polleria.models import AuthSession, BusinessSettings, User
 from polleria.services.auth_tokens import (
     consume_token,
@@ -155,6 +155,30 @@ class AuthState(rx.State):
     def can_view_all_sales(self) -> bool:
         return has_permission(self.role, "sales.view_all")
 
+    @rx.var(cache=True)
+    def can_see_dashboard(self) -> bool:
+        return has_permission(self.role, "dashboard")
+
+    @rx.var(cache=True)
+    def can_use_pos(self) -> bool:
+        return has_permission(self.role, "pos")
+
+    @rx.var(cache=True)
+    def can_view_sales(self) -> bool:
+        return has_permission(self.role, "sales.view_own")
+
+    @rx.var(cache=True)
+    def can_view_products(self) -> bool:
+        return has_permission(self.role, "products.view")
+
+    @rx.var(cache=True)
+    def can_close_cash(self) -> bool:
+        return has_permission(self.role, "cash.close")
+
+    @rx.var(cache=True)
+    def can_delete_records(self) -> bool:
+        return has_permission(self.role, "records.delete")
+
     def _has(self, permission: str) -> bool:
         return has_permission(self.authenticated_user.role, permission)
 
@@ -165,9 +189,7 @@ class AuthState(rx.State):
 
     def _bootstrap(self) -> None:
         try:
-            ensure_schema()
-            migrate_schema()
-            migrate_plain_passwords()
+            init_db()
             seed_if_empty()
             with rx.session() as session:
                 settings = session.exec(select(BusinessSettings)).first()
@@ -179,9 +201,32 @@ class AuthState(rx.State):
             self.db_error = ""
         except Exception:
             self.db_error = (
-                "No se pudo conectar a la base de datos. "
-                "Verificá DATABASE_URL y que PostgreSQL esté disponible."
+                "No hay conexión persistente a PostgreSQL (Supabase). "
+                "Sin DATABASE_URL en Reflex Cloud los datos se pierden al reiniciar. "
+                "Configurá Secrets → DATABASE_URL con Session pooler."
             )
+
+    def _home_path(self) -> str:
+        if self._has("dashboard"):
+            return "/"
+        if self._has("pos"):
+            return "/pos"
+        if self._has("expenses.manage"):
+            return "/gastos"
+        return "/login"
+
+    def _home_redirect(self):
+        return rx.redirect(self._home_path())
+
+    def _redirect_guest(self):
+        """Manda al login si no hay sesión. Evita el bootstrap pesado sin token."""
+        if not self.auth_token:
+            return rx.redirect("/login")
+        self._bootstrap()
+        if self.db_error or not self.is_authenticated:
+            return rx.redirect("/login")
+        self._touch()
+        return None
 
     @rx.event
     def bootstrap(self):
@@ -189,24 +234,21 @@ class AuthState(rx.State):
 
     @rx.event
     def require_login(self):
-        self._bootstrap()
-        if self.db_error:
-            return rx.redirect("/login")
-        if not self.is_authenticated:
-            return rx.redirect("/login")
-        self._touch()
+        return self._redirect_guest()
 
     @rx.event
     def require_guest(self):
+        if not self.auth_token:
+            return
         self._bootstrap()
         if self.is_authenticated and not self.db_error:
-            return rx.redirect("/")
+            return self._home_redirect()
 
     @rx.event
     def require_registration(self):
         self._bootstrap()
-        if self.is_authenticated and not self.db_error:
-            return rx.redirect("/")
+        if self.auth_token and self.is_authenticated and not self.db_error:
+            return self._home_redirect()
 
     def _touch(self) -> None:
         if self.authenticated_user.id < 0:
@@ -278,13 +320,6 @@ class AuthState(rx.State):
                 if not user.activo:
                     self.auth_error = "El usuario está desactivado."
                     return
-                if is_mail_configured() and not user.email_verified:
-                    self.auth_error = (
-                        "Verificá tu email antes de ingresar. "
-                        "Revisá tu bandeja o solicitá un nuevo enlace abajo."
-                    )
-                    self.pending_email = user.email
-                    return
                 if user.needs_password_hash():
                     user.password_hash = User.hash_password(password)
                     user.email_verified = True
@@ -298,7 +333,7 @@ class AuthState(rx.State):
             return
         self.login_email = ""
         self.login_password = ""
-        return rx.redirect("/")
+        return self._home_redirect()
 
     @rx.event
     def register(self, form_data: dict):
@@ -359,7 +394,7 @@ class AuthState(rx.State):
         if is_mail_configured():
             return rx.redirect("/verificar-email/pendiente")
         self._login(user.id)
-        return rx.redirect("/")
+        return self._home_redirect()
 
     @rx.event
     def forgot_password(self, form_data: dict):

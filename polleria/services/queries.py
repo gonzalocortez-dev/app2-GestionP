@@ -84,6 +84,13 @@ def sales_by_day(db: Session, start: datetime, end: datetime) -> list[dict]:
             bucket[key]["ventas"] = round_money(bucket[key]["ventas"] + sale.total)
             if sale.tiene_costo:
                 bucket[key]["ganancia"] = round_money(bucket[key]["ganancia"] + sale.ganancia)
+    expenses = db.exec(
+        select(Expense).where(Expense.fecha >= start, Expense.fecha < end)
+    ).all()
+    for expense in expenses:
+        key = to_ar(expense.fecha).date().isoformat()
+        if key in bucket:
+            bucket[key]["ganancia"] = round_money(bucket[key]["ganancia"] - expense.monto)
     return list(bucket.values())
 
 
@@ -127,6 +134,25 @@ def sales_by_seller(db: Session, start: datetime, end: datetime) -> list[dict]:
             "total": round_money(float(total or 0)),
         }
         for nombre, apellido, total in rows
+    ]
+
+
+def sales_by_branch(db: Session, start: datetime, end: datetime) -> list[dict]:
+    rows = db.exec(
+        select(
+            Sale.sucursal,
+            func.coalesce(func.sum(Sale.total), 0),
+        )
+        .where(Sale.fecha >= start, Sale.fecha < end, Sale.estado == "completada")
+        .group_by(Sale.sucursal)
+        .order_by(func.sum(Sale.total).desc())
+    ).all()
+    return [
+        {
+            "sucursal": (nombre or "").strip() or "Sin sucursal",
+            "total": round_money(float(total or 0)),
+        }
+        for nombre, total in rows
     ]
 
 
@@ -191,10 +217,12 @@ def report_sales(
                 "fecha": format_dt(sale.fecha),
                 "numero": f"#{sale.id:05d}",
                 "vendedor": user.nombre_completo,
+                "sucursal": sale.sucursal or "—",
                 "total_fmt": money(sale.total),
                 "metodo_pago": sale.metodo_pago,
                 "ganancia_fmt": money(sale.ganancia) if sale.tiene_costo else "N/D",
                 "tipo": "Rápida" if sale.is_quick else "Detallada",
+                "observacion": (sale.observacion or "").strip() or "—",
             }
         )
     return rows
@@ -212,6 +240,7 @@ def report_expenses(db: Session, start: datetime, end: datetime) -> list[dict]:
             "fecha": format_dt(e.fecha),
             "categoria": e.categoria,
             "descripcion": e.descripcion,
+            "sucursal": e.sucursal or "—",
             "importe_fmt": money(e.monto),
         }
         for e in rows
@@ -284,16 +313,26 @@ def cash_totals(db: Session, start: datetime, end: datetime, vendedor_id: int | 
     for sale in sales:
         by_method[sale.metodo_pago] += sale.total
     tarjetas = by_method.get("Débito", 0) + by_method.get("Crédito", 0)
+    transferencias = by_method.get("Transferencia", 0) + by_method.get("Mercado Pago", 0)
+    expenses_q = select(Expense).where(Expense.fecha >= start, Expense.fecha < end)
+    expenses = db.exec(expenses_q).all()
+    gastos = round_money(sum(e.monto for e in expenses))
+    ganancia_bruta = round_money(sum(s.ganancia for s in sales if s.tiene_costo))
+    ganancia_neta = round_money(ganancia_bruta - gastos)
     return {
         "efectivo": round_money(by_method.get("Efectivo", 0)),
         "efectivo_fmt": money(by_method.get("Efectivo", 0)),
-        "transferencias": round_money(by_method.get("Transferencia", 0)),
-        "transferencias_fmt": money(by_method.get("Transferencia", 0)),
+        "transferencias": round_money(transferencias),
+        "transferencias_fmt": money(transferencias),
         "tarjetas": round_money(tarjetas),
         "tarjetas_fmt": money(tarjetas),
-        "mercadopago": round_money(by_method.get("Mercado Pago", 0)),
-        "mercadopago_fmt": money(by_method.get("Mercado Pago", 0)),
-        "total": round_money(sum(s.total for s in sales)),
-        "total_fmt": money(sum(s.total for s in sales)),
+        "gastos": gastos,
+        "gastos_fmt": money(gastos),
+        "ganancia_bruta": ganancia_bruta,
+        "ganancia_neta": ganancia_neta,
+        "ganancia_neta_fmt": money(ganancia_neta),
+        "total": ganancia_neta,
+        "total_fmt": money(ganancia_neta),
         "operaciones": len(sales),
+        "ventas": round_money(sum(s.total for s in sales)),
     }

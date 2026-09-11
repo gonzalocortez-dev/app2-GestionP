@@ -18,6 +18,9 @@ class ProductRow:
     costo_fmt: str = "$0,00"
     stock: float = 0.0
     stock_fmt: str = "0"
+    stock_b1: str = "0"
+    stock_b2: str = "0"
+    stock_b3: str = "0"
     stock_minimo: float = 0.0
     valor_fmt: str = "$0,00"
     estado: str = "stock_normal"
@@ -51,10 +54,12 @@ class SaleRow:
     fecha: str = ""
     numero: str = ""
     vendedor: str = ""
+    sucursal: str = ""
     total_fmt: str = ""
     metodo_pago: str = ""
     ganancia_fmt: str = ""
     tipo: str = ""
+    observacion: str = ""
 
 
 @dataclass
@@ -63,7 +68,15 @@ class ExpenseRow:
     fecha: str = ""
     categoria: str = ""
     descripcion: str = ""
+    sucursal: str = ""
     importe_fmt: str = ""
+
+
+@dataclass
+class BoxPreviewRow:
+    producto: str = ""
+    por_caja_fmt: str = ""
+    total_fmt: str = ""
 
 
 @dataclass
@@ -74,6 +87,7 @@ class MovementRow:
     tipo: str = ""
     cantidad_fmt: str = ""
     motivo: str = ""
+    sucursal: str = ""
     usuario: str = ""
 
 
@@ -141,6 +155,7 @@ class PurchaseRow:
     id: int = 0
     fecha: str = ""
     proveedor: str = ""
+    sucursal: str = ""
     total_fmt: str = ""
     usuario: str = ""
 
@@ -149,8 +164,8 @@ class PurchaseRow:
 class ClosureRow:
     id: int = 0
     fecha: str = ""
-    usuario: str = ""
+    efectivo_fmt: str = ""
+    transferencias_fmt: str = ""
+    tarjetas_fmt: str = ""
+    gastos_fmt: str = ""
     total_fmt: str = ""
-    efectivo_esperado_fmt: str = ""
-    efectivo_contado_fmt: str = ""
-    diferencia_fmt: str = ""

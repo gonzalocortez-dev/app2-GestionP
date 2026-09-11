@@ -6,11 +6,21 @@ import reflex as rx
 from sqlmodel import func, select
 
 from polleria.auth.state import AuthState
-from polleria.constants import INVENTORY_TYPE_LABELS, PRODUCT_CATEGORIES, ROLE_LABELS, UNITS
+from polleria.constants import (
+    BRANCHES,
+    CHICKEN_BOX_COUNTS,
+    CHICKEN_BOX_CUTS,
+    INVENTORY_TYPE_LABELS,
+    PRODUCT_CATEGORIES,
+    ROLE_LABELS,
+    UNITS,
+)
 from polleria.models import InventoryMovement, Product, Sale, User
-from polleria.schemas import MovementRow, ProductRow, UserRow
+from polleria.schemas import BoxPreviewRow, MovementRow, ProductRow, UserRow
 from polleria.services.core import BusinessError, PermissionDenied, safe_commit
-from polleria.services.ops import move_inventory
+from polleria.services.deletes import delete_product
+from polleria.services.ops import ensure_chicken_cut_products, move_inventory, receive_chicken_boxes
+from polleria.services.stock import ensure_product_branches, get_or_create_branch_stock, stocks_by_product, sync_product_total
 from polleria.states.pos import _product_row
 from polleria.utils.forms import form_field
 from polleria.utils.money import money, parse_amount
@@ -46,9 +56,10 @@ class ProductState(AuthState):
 
     @rx.event
     def on_load(self):
-        self._bootstrap()
-        if not self.is_authenticated:
-            return rx.redirect("/login")
+        if redir := self._redirect_guest():
+            return redir
+        if not self._has("products.view"):
+            return self._home_redirect()
         self.reload()
 
     @rx.event
@@ -133,10 +144,16 @@ class ProductState(AuthState):
                 product.unidad_medida = unidad
                 product.precio_venta = precio
                 product.costo = costo
-                product.stock = stock
                 product.stock_minimo = minimo
                 product.activo = self.form_activo
                 db.add(product)
+                db.flush()
+                ensure_product_branches(db, product.id or 0)
+                if not self.editing_id and stock > 0:
+                    row = get_or_create_branch_stock(db, product.id or 0, BRANCHES[0])
+                    row.cantidad = stock
+                    db.add(row)
+                sync_product_total(db, product)
                 safe_commit(db)
         except (BusinessError, PermissionDenied) as exc:
             return rx.toast.error(str(exc))
@@ -159,6 +176,27 @@ class ProductState(AuthState):
             return rx.toast.error(str(exc))
         self.reload()
 
+    @rx.event
+    def delete_item(self, product_id: int):
+        try:
+            with rx.session() as db:
+                result = delete_product(
+                    db,
+                    actor_id=self.authenticated_user.id,
+                    actor_role=self.authenticated_user.role,
+                    product_id=product_id,
+                )
+        except (BusinessError, PermissionDenied) as exc:
+            return rx.toast.error(str(exc))
+        self.reload()
+        if result == "desactivado":
+            return rx.toast.success("Producto desactivado: tiene ventas o compras.")
+        return rx.toast.success("Producto eliminado")
+
+
+def _kg_fmt(value: float) -> str:
+    return f"{value:.3f}".replace(".", ",") + " kg"
+
 
 class InventoryState(AuthState):
     items: list[ProductRow] = []
@@ -169,20 +207,79 @@ class InventoryState(AuthState):
     tipo: str = "ajuste"
     cantidad: str = ""
     motivo: str = ""
+    box_count: str = "1"
+    box_sucursal: str = ""
+    move_sucursal: str = ""
+    box_options: list[str] = list(CHICKEN_BOX_COUNTS)
 
     @rx.event
     def on_load(self):
-        self._bootstrap()
-        if not self.is_authenticated:
-            return rx.redirect("/login")
+        if redir := self._redirect_guest():
+            return redir
         if not self._has("inventory.view"):
-            return rx.redirect("/")
+            return self._home_redirect()
         self.reload()
+
+    @rx.var(cache=True)
+    def box_preview(self) -> list[BoxPreviewRow]:
+        try:
+            boxes = int(self.box_count)
+        except ValueError:
+            boxes = 1
+        rows = []
+        for nombre, kg in CHICKEN_BOX_CUTS:
+            rows.append(
+                BoxPreviewRow(
+                    producto=nombre,
+                    por_caja_fmt=_kg_fmt(kg),
+                    total_fmt=_kg_fmt(round(kg * boxes, 3)),
+                )
+            )
+        return rows
+
+    @rx.event
+    def set_box_count(self, value: str):
+        self.box_count = value
+
+    @rx.event
+    def set_box_sucursal(self, value: str):
+        self.box_sucursal = "" if value in {"", "Seleccioná sucursal"} else value
+
+    @rx.event
+    def set_move_sucursal(self, value: str):
+        self.move_sucursal = "" if value in {"", "Seleccioná sucursal"} else value
+
+    @rx.event
+    def receive_boxes(self):
+        if not self._has("inventory.manage"):
+            return rx.toast.error("No tenés permisos para cargar stock.")
+        if not self.box_sucursal.strip() or self.box_sucursal not in BRANCHES:
+            return rx.toast.error("Seleccioná en qué sucursal estás cargando las cajas.")
+        try:
+            boxes = int(self.box_count)
+            with rx.session() as db:
+                receive_chicken_boxes(
+                    db,
+                    actor_id=self.authenticated_user.id,
+                    actor_role=self.authenticated_user.role,
+                    boxes=boxes,
+                    sucursal=self.box_sucursal,
+                )
+        except (ValueError, BusinessError, PermissionDenied) as exc:
+            return rx.toast.error(
+                str(exc) if not isinstance(exc, ValueError) else "Seleccioná cuántas cajas."
+            )
+        self.reload()
+        return rx.toast.success(
+            f"Se cargó el stock de {self.box_count} caja(s) en {self.box_sucursal}."
+        )
 
     @rx.event
     def reload(self):
         with rx.session() as db:
+            ensure_chicken_cut_products(db)
             products = db.exec(select(Product).order_by(Product.nombre)).all()
+            by_product = stocks_by_product(db, [p.id or 0 for p in products])
             moves = db.exec(
                 select(InventoryMovement, Product, User)
                 .join(Product, Product.id == InventoryMovement.product_id)
@@ -190,7 +287,14 @@ class InventoryState(AuthState):
                 .order_by(InventoryMovement.fecha.desc())
                 .limit(80)
             ).all()
-        self.items = [_product_row(p) for p in products]
+        self.items = [
+            _product_row(
+                p,
+                qty=sum(by_product.get(p.id or 0, {}).values()),
+                by_branch=by_product.get(p.id or 0),
+            )
+            for p in products
+        ]
         self.product_options = [f"{p.id} · {p.nombre}" for p in products]
         self.movements = [
             MovementRow(
@@ -200,6 +304,7 @@ class InventoryState(AuthState):
                 tipo=INVENTORY_TYPE_LABELS.get(m.tipo, m.tipo),
                 cantidad_fmt=str(m.cantidad).replace(".", ","),
                 motivo=m.motivo,
+                sucursal=m.sucursal or "—",
                 usuario=u.nombre_completo,
             )
             for m, p, u in moves
@@ -214,6 +319,7 @@ class InventoryState(AuthState):
         self.tipo = "ajuste"
         self.cantidad = ""
         self.motivo = ""
+        self.move_sucursal = self.box_sucursal or BRANCHES[0]
         self.dialog_open = True
 
     @rx.event
@@ -227,6 +333,8 @@ class InventoryState(AuthState):
     @rx.event
     def save_move(self):
         try:
+            if not self.move_sucursal.strip() or self.move_sucursal not in BRANCHES:
+                return rx.toast.error("Seleccioná la sucursal del movimiento.")
             product_id = int(self.product_label.split(" · ", 1)[0])
             qty = parse_amount(self.cantidad)
             with rx.session() as db:
@@ -238,6 +346,7 @@ class InventoryState(AuthState):
                     tipo=self.tipo,
                     cantidad=qty,
                     motivo=self.motivo.strip() or "Movimiento manual",
+                    sucursal=self.move_sucursal,
                 )
         except (ValueError, BusinessError, PermissionDenied) as exc:
             return rx.toast.error(str(exc) if not isinstance(exc, ValueError) else "Datos inválidos.")
@@ -258,11 +367,10 @@ class SellerState(AuthState):
 
     @rx.event
     def on_load(self):
-        self._bootstrap()
-        if not self.is_authenticated:
-            return rx.redirect("/login")
+        if redir := self._redirect_guest():
+            return redir
         if not self._has("sellers.view"):
-            return rx.redirect("/")
+            return self._home_redirect()
         self.reload()
 
     @rx.event

@@ -63,8 +63,15 @@ def apply_stock(
     usuario_id: int,
     motivo: str = "",
     referencia: str = "",
+    sucursal: str = "",
     fecha: datetime | None = None,
 ) -> None:
+    from polleria.services.stock import get_or_create_branch_stock, sync_product_total
+
+    branch = (sucursal or "").strip()
+    if not branch:
+        raise BusinessError("Seleccioná la sucursal para mover stock.")
+
     if tipo == "ajuste":
         delta = cantidad
     elif tipo in {"compra", "devolucion"}:
@@ -72,13 +79,19 @@ def apply_stock(
     else:
         delta = -abs(cantidad)
 
-    nuevo = round((product.stock or 0) + delta, 3)
+    row = get_or_create_branch_stock(db, product.id or 0, branch)
+    nuevo = round((row.cantidad or 0) + delta, 3)
     if nuevo < -0.0001 and tipo == "venta":
-        raise BusinessError(f"Stock insuficiente de {product.nombre}. Disponible: {product.stock}")
-    product.stock = max(nuevo, 0) if tipo != "ajuste" else nuevo
+        raise BusinessError(
+            f"Stock insuficiente de {product.nombre} en {branch}. "
+            f"Disponible: {row.cantidad}"
+        )
     if tipo == "ajuste":
-        product.stock = nuevo
-    db.add(product)
+        row.cantidad = nuevo
+    else:
+        row.cantidad = max(nuevo, 0)
+    db.add(row)
+    sync_product_total(db, product)
     db.add(
         InventoryMovement(
             product_id=product.id,
@@ -88,6 +101,7 @@ def apply_stock(
             usuario_id=usuario_id,
             fecha=fecha or now_ar(),
             referencia=referencia,
+            sucursal=branch,
         )
     )
 

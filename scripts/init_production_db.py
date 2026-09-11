@@ -6,7 +6,9 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-load_dotenv(Path(__file__).resolve().parents[1] / ".env")
+_root = Path(__file__).resolve().parents[1]
+load_dotenv(_root / ".env")
+load_dotenv(_root / ".env.supabase", override=True)
 
 import reflex as rx  # noqa: E402
 

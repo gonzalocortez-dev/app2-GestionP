@@ -39,15 +39,15 @@ def _nav_item(label: str, href: str, icon: str, visible) -> rx.Component:
 
 def _nav_links() -> rx.Component:
     return rx.vstack(
-        _nav_item("Dashboard", "/", "layout-dashboard", True),
-        _nav_item("Punto de Venta", "/pos", "shopping-cart", True),
-        _nav_item("Ventas", "/ventas", "receipt", True),
-        _nav_item("Productos", "/productos", "utensils", True),
+        _nav_item("Dashboard", "/", "layout-dashboard", AuthState.can_see_dashboard),
+        _nav_item("Punto de Venta", "/pos", "shopping-cart", AuthState.can_use_pos),
+        _nav_item("Ventas", "/ventas", "receipt", AuthState.can_view_sales),
+        _nav_item("Productos", "/productos", "utensils", AuthState.can_view_products),
         _nav_item("Inventario", "/inventario", "warehouse", AuthState.can_view_inventory),
         _nav_item("Gastos", "/gastos", "wallet", AuthState.can_manage_expenses),
         _nav_item("Compras", "/compras", "package-plus", AuthState.can_view_purchases),
         _nav_item("Vendedores", "/vendedores", "users", AuthState.can_view_sellers),
-        _nav_item("Cierre de caja", "/caja", "landmark", True),
+        _nav_item("Cierre de caja", "/caja", "landmark", AuthState.can_close_cash),
         _nav_item("Reportes", "/reportes", "chart-column", AuthState.can_view_reports),
         _nav_item("Usuarios", "/usuarios", "shield", AuthState.can_manage_users),
         _nav_item("Configuración", "/configuracion", "settings", AuthState.can_manage_settings),

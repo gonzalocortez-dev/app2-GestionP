@@ -8,6 +8,7 @@ from polleria.auth.state import AuthState
 from polleria.components.layout import app_shell
 from polleria.components.widgets import empty_state, kpi_card, section_card
 from polleria.constants import PERIODS
+from polleria.pages.auth_pages import login_page
 from polleria.states.dashboard import DashboardState
 
 
@@ -31,6 +32,14 @@ def period_chips() -> rx.Component:
 
 
 def dashboard_page() -> rx.Component:
+    return rx.cond(
+        AuthState.is_authenticated,
+        rx.cond(AuthState.can_see_dashboard, _dashboard_content(), rx.fragment()),
+        login_page(),
+    )
+
+
+def _dashboard_content() -> rx.Component:
     return app_shell(
         "Dashboard",
         period_chips(),
@@ -48,13 +57,13 @@ def dashboard_page() -> rx.Component:
             kpi_card("Ventas del período", DashboardState.facturacion_fmt, "banknote", "orange"),
             rx.cond(
                 AuthState.can_see_profits,
-                kpi_card("Ganancia bruta", DashboardState.ganancia_bruta_fmt, "trending-up", "green"),
+                kpi_card("Ganancia neta", DashboardState.ganancia_neta_fmt, "trending-up", "green"),
                 kpi_card("Ticket promedio", DashboardState.ticket_fmt, "receipt", "blue"),
             ),
             kpi_card("Gastos del período", DashboardState.gastos_fmt, "wallet", "red"),
             rx.cond(
                 AuthState.can_see_profits,
-                kpi_card("Ganancia neta estimada", DashboardState.ganancia_neta_fmt, "piggy-bank", "teal"),
+                kpi_card("Ticket promedio", DashboardState.ticket_fmt, "receipt", "blue"),
                 kpi_card("Operaciones", DashboardState.operaciones, "hash", "blue"),
             ),
             kpi_card("Costo de mercadería", DashboardState.costo_fmt, "package", "amber"),
@@ -89,7 +98,7 @@ def dashboard_page() -> rx.Component:
             rx.cond(
                 AuthState.can_see_profits,
                 section_card(
-                    rx.heading("Ganancias por día", size="5"),
+                    rx.heading("Ganancia neta por día", size="5"),
                     rx.recharts.line_chart(
                         rx.recharts.line(data_key="ganancia", stroke="#16a34a", type_="monotone"),
                         rx.recharts.x_axis(data_key="fecha"),
@@ -133,19 +142,19 @@ def dashboard_page() -> rx.Component:
                 ),
             ),
             section_card(
-                rx.heading("Ventas por vendedor", size="5"),
+                rx.heading("Ventas por sucursal", size="5"),
                 rx.cond(
-                    DashboardState.sellers.length() > 0,
+                    DashboardState.branches.length() > 0,
                     rx.recharts.bar_chart(
                         rx.recharts.bar(data_key="total", fill="#ea580c", radius=[6, 6, 0, 0]),
-                        rx.recharts.x_axis(data_key="vendedor"),
+                        rx.recharts.x_axis(data_key="sucursal"),
                         rx.recharts.y_axis(),
                         rx.recharts.graphing_tooltip(),
-                        data=DashboardState.sellers,
+                        data=DashboardState.branches,
                         width="100%",
                         height=280,
                     ),
-                    empty_state("Sin datos de vendedores", "users"),
+                    empty_state("Sin datos de sucursales", "store"),
                 ),
             ),
             columns=rx.breakpoints(initial="1", lg="2"),

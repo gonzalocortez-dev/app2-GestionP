@@ -16,6 +16,7 @@ from polleria.schemas import (
     UserRow,
 )
 from polleria.services.core import BusinessError, PermissionDenied, safe_commit
+from polleria.services.deletes import delete_sale, delete_user
 from polleria.services import queries
 from polleria.utils.money import money
 from polleria.utils.time import format_dt, iso_date, period_range, today_ar
@@ -30,9 +31,10 @@ class SalesListState(AuthState):
 
     @rx.event
     def on_load(self):
-        self._bootstrap()
-        if not self.is_authenticated:
-            return rx.redirect("/login")
+        if redir := self._redirect_guest():
+            return redir
+        if not self._has("sales.view_own"):
+            return self._home_redirect()
         self.reload()
 
     @rx.event
@@ -75,6 +77,21 @@ class SalesListState(AuthState):
         self.vendedor_label = value
         self.reload()
 
+    @rx.event
+    def delete_item(self, sale_id: int):
+        try:
+            with rx.session() as db:
+                delete_sale(
+                    db,
+                    actor_id=self.authenticated_user.id,
+                    actor_role=self.authenticated_user.role,
+                    sale_id=sale_id,
+                )
+        except (BusinessError, PermissionDenied) as exc:
+            return rx.toast.error(str(exc))
+        self.reload()
+        return rx.toast.success("Venta eliminada")
+
 
 class ReportState(AuthState):
     tab: str = "ventas"
@@ -88,11 +105,10 @@ class ReportState(AuthState):
 
     @rx.event
     def on_load(self):
-        self._bootstrap()
-        if not self.is_authenticated:
-            return rx.redirect("/login")
+        if redir := self._redirect_guest():
+            return redir
         if not self._has("reports.view"):
-            return rx.redirect("/")
+            return self._home_redirect()
         self.start = iso_date(today_ar().replace(day=1))
         self.end = iso_date()
         self.reload()
@@ -127,11 +143,10 @@ class UsersAdminState(AuthState):
 
     @rx.event
     def on_load(self):
-        self._bootstrap()
-        if not self.is_authenticated:
-            return rx.redirect("/login")
+        if redir := self._redirect_guest():
+            return redir
         if not self._has("users.manage"):
-            return rx.redirect("/")
+            return self._home_redirect()
         self.reload()
 
     @rx.event
@@ -242,6 +257,23 @@ class UsersAdminState(AuthState):
             return rx.toast.error(str(exc))
         self.reload()
 
+    @rx.event
+    def delete_item(self, user_id: int):
+        try:
+            with rx.session() as db:
+                result = delete_user(
+                    db,
+                    actor_id=self.authenticated_user.id,
+                    actor_role=self.authenticated_user.role,
+                    user_id=user_id,
+                )
+        except (BusinessError, PermissionDenied) as exc:
+            return rx.toast.error(str(exc))
+        self.reload()
+        if result == "desactivado":
+            return rx.toast.success("Usuario desactivado: tiene movimientos cargados.")
+        return rx.toast.success("Usuario eliminado")
+
 
 class SettingsState(AuthState):
     nombre_comercio: str = ""
@@ -255,11 +287,10 @@ class SettingsState(AuthState):
 
     @rx.event
     def on_load(self):
-        self._bootstrap()
-        if not self.is_authenticated:
-            return rx.redirect("/login")
+        if redir := self._redirect_guest():
+            return redir
         if not self._has("settings.manage"):
-            return rx.redirect("/")
+            return self._home_redirect()
         self.reload()
 
     @rx.event

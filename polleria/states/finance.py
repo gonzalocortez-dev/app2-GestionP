@@ -6,10 +6,11 @@ import reflex as rx
 from sqlmodel import select
 
 from polleria.auth.state import AuthState
-from polleria.constants import EXPENSE_CATEGORIES
+from polleria.constants import BRANCHES, EXPENSE_CATEGORIES
 from polleria.models import CashRegisterClosure, Expense, Product, Purchase, User
 from polleria.schemas import ClosureRow, ExpenseRow, ProductRow, PurchaseRow
 from polleria.services.core import BusinessError, PermissionDenied, audit, safe_commit
+from polleria.services.deletes import delete_expense, delete_purchase
 from polleria.services.ops import create_purchase, register_expense
 from polleria.services import queries
 from polleria.states.pos import _product_row
@@ -29,15 +30,15 @@ class ExpenseState(AuthState):
     monto: str = ""
     fecha: str = ""
     metodo_pago: str = "Efectivo"
+    sucursal: str = ""
     observaciones: str = ""
 
     @rx.event
     def on_load(self):
-        self._bootstrap()
-        if not self.is_authenticated:
-            return rx.redirect("/login")
+        if redir := self._redirect_guest():
+            return redir
         if not self._has("expenses.manage"):
-            return rx.redirect("/")
+            return self._home_redirect()
         self.fecha = iso_date()
         self.reload()
 
@@ -51,6 +52,7 @@ class ExpenseState(AuthState):
                 fecha=format_dt(e.fecha),
                 categoria=e.categoria,
                 descripcion=e.descripcion,
+                sucursal=e.sucursal or "—",
                 importe_fmt=money(e.monto),
             )
             for e in rows
@@ -63,6 +65,7 @@ class ExpenseState(AuthState):
         self.monto = ""
         self.fecha = iso_date()
         self.metodo_pago = "Efectivo"
+        self.sucursal = BRANCHES[0]
         self.observaciones = ""
         self.form_key += 1
         self.dialog_open = True
@@ -82,9 +85,12 @@ class ExpenseState(AuthState):
         monto = parse_amount(form_field(form_data, "monto", self.monto))
         fecha_raw = form_field(form_data, "fecha", self.fecha or iso_date())
         metodo_pago = form_field(form_data, "metodo_pago", self.metodo_pago or "Efectivo")
+        sucursal = form_field(form_data, "sucursal", self.sucursal)
         observaciones = form_field(form_data, "observaciones", self.observaciones)
         if not categoria:
             return rx.toast.error("Elegí una categoría.")
+        if not sucursal.strip() or sucursal.strip() not in BRANCHES:
+            return rx.toast.error("Seleccioná la sucursal.")
         if monto <= 0:
             return rx.toast.error("El importe debe ser mayor a cero.")
         if self.authenticated_user.id < 0:
@@ -100,6 +106,7 @@ class ExpenseState(AuthState):
                     monto=monto,
                     fecha=start_of_day(parse_date(fecha_raw)),
                     metodo_pago=metodo_pago,
+                    sucursal=sucursal,
                     observaciones=observaciones,
                 )
         except (BusinessError, PermissionDenied) as exc:
@@ -110,6 +117,21 @@ class ExpenseState(AuthState):
         self.reload()
         return rx.toast.success("Gasto registrado")
 
+    @rx.event
+    def delete_item(self, expense_id: int):
+        try:
+            with rx.session() as db:
+                delete_expense(
+                    db,
+                    actor_id=self.authenticated_user.id,
+                    actor_role=self.authenticated_user.role,
+                    expense_id=expense_id,
+                )
+        except (BusinessError, PermissionDenied) as exc:
+            return rx.toast.error(str(exc))
+        self.reload()
+        return rx.toast.success("Gasto eliminado")
+
 
 class PurchaseState(AuthState):
     items: list[PurchaseRow] = []
@@ -119,6 +141,7 @@ class PurchaseState(AuthState):
     line_form_key: int = 0
     proveedor: str = ""
     fecha: str = ""
+    sucursal: str = ""
     observaciones: str = ""
     registrar_gasto: bool = True
     metodo_pago: str = "Efectivo"
@@ -145,11 +168,10 @@ class PurchaseState(AuthState):
 
     @rx.event
     def on_load(self):
-        self._bootstrap()
-        if not self.is_authenticated:
-            return rx.redirect("/login")
+        if redir := self._redirect_guest():
+            return redir
         if not self._has("purchases.view"):
-            return rx.redirect("/")
+            return self._home_redirect()
         self.fecha = iso_date()
         self.reload()
 
@@ -163,6 +185,7 @@ class PurchaseState(AuthState):
                 id=p.id or 0,
                 fecha=format_dt(p.fecha),
                 proveedor=p.proveedor,
+                sucursal=p.sucursal or "—",
                 total_fmt=money(p.total),
                 usuario=u.nombre_completo,
             )
@@ -179,6 +202,7 @@ class PurchaseState(AuthState):
             return rx.toast.error("Solo un administrador puede registrar compras.")
         self.proveedor = ""
         self.fecha = iso_date()
+        self.sucursal = BRANCHES[0]
         self.observaciones = ""
         self.registrar_gasto = True
         self.qty = "1"
@@ -208,6 +232,10 @@ class PurchaseState(AuthState):
     @rx.event
     def set_fecha(self, value: str):
         self.fecha = value
+
+    @rx.event
+    def set_sucursal(self, value: str):
+        self.sucursal = "" if value in {"", "Seleccioná sucursal"} else value
 
     @rx.event
     def set_product_label(self, value: str):
@@ -258,6 +286,8 @@ class PurchaseState(AuthState):
     def save(self):
         if not self.proveedor.strip():
             return rx.toast.error("Ingresá el proveedor.")
+        if not self.sucursal.strip() or self.sucursal not in BRANCHES:
+            return rx.toast.error("Seleccioná la sucursal de la compra.")
         items = [
             {
                 "product_id": pid,
@@ -280,6 +310,7 @@ class PurchaseState(AuthState):
                     registrar_gasto=self.registrar_gasto,
                     observaciones=self.observaciones,
                     metodo_pago=self.metodo_pago,
+                    sucursal=self.sucursal,
                 )
         except (BusinessError, PermissionDenied) as exc:
             return rx.toast.error(str(exc))
@@ -289,12 +320,27 @@ class PurchaseState(AuthState):
         self.reload()
         return rx.toast.success("Compra registrada e inventario actualizado")
 
+    @rx.event
+    def delete_item(self, purchase_id: int):
+        try:
+            with rx.session() as db:
+                delete_purchase(
+                    db,
+                    actor_id=self.authenticated_user.id,
+                    actor_role=self.authenticated_user.role,
+                    purchase_id=purchase_id,
+                )
+        except (BusinessError, PermissionDenied) as exc:
+            return rx.toast.error(str(exc))
+        self.reload()
+        return rx.toast.success("Compra eliminada")
+
 
 class CashState(AuthState):
     efectivo_fmt: str = "$0,00"
     transferencias_fmt: str = "$0,00"
     tarjetas_fmt: str = "$0,00"
-    mercadopago_fmt: str = "$0,00"
+    gastos_fmt: str = "$0,00"
     total_fmt: str = "$0,00"
     operaciones: int = 0
     efectivo_esperado: float = 0.0
@@ -313,11 +359,10 @@ class CashState(AuthState):
 
     @rx.event
     def on_load(self):
-        self._bootstrap()
-        if not self.is_authenticated:
-            return rx.redirect("/login")
+        if redir := self._redirect_guest():
+            return redir
         if not self._has("cash.close"):
-            return rx.redirect("/")
+            return self._home_redirect()
         self.reload()
 
     @rx.event
@@ -336,7 +381,7 @@ class CashState(AuthState):
         self.efectivo_fmt = totals["efectivo_fmt"]
         self.transferencias_fmt = totals["transferencias_fmt"]
         self.tarjetas_fmt = totals["tarjetas_fmt"]
-        self.mercadopago_fmt = totals["mercadopago_fmt"]
+        self.gastos_fmt = totals["gastos_fmt"]
         self.total_fmt = totals["total_fmt"]
         self.operaciones = totals["operaciones"]
         self.efectivo_esperado = totals["efectivo"]
@@ -345,11 +390,15 @@ class CashState(AuthState):
             ClosureRow(
                 id=c.id or 0,
                 fecha=format_dt(c.fecha),
-                usuario=u.nombre_completo,
-                total_fmt=money(c.total_ventas),
-                efectivo_esperado_fmt=money(c.efectivo_esperado),
-                efectivo_contado_fmt=money(c.efectivo_contado),
-                diferencia_fmt=money(c.diferencia),
+                efectivo_fmt=money(c.efectivo_esperado),
+                transferencias_fmt=money(c.total_transferencias),
+                tarjetas_fmt=money(c.total_tarjetas),
+                gastos_fmt=money(getattr(c, "total_gastos", 0) or 0),
+                total_fmt=money(
+                    c.ganancia_neta
+                    if (c.total_gastos or c.ganancia_neta)
+                    else c.total_ventas
+                ),
             )
             for c, u in rows
         ]
@@ -370,10 +419,12 @@ class CashState(AuthState):
                     efectivo_esperado=totals["efectivo"],
                     efectivo_contado=counted,
                     diferencia=round_money(counted - totals["efectivo"]),
-                    total_ventas=totals["total"],
+                    total_ventas=totals.get("ventas", totals["total"]),
                     total_transferencias=totals["transferencias"],
                     total_tarjetas=totals["tarjetas"],
-                    total_mercadopago=totals["mercadopago"],
+                    total_mercadopago=0,
+                    total_gastos=totals["gastos"],
+                    ganancia_neta=totals["ganancia_neta"],
                     cantidad_operaciones=totals["operaciones"],
                     observaciones=self.observaciones,
                 )

@@ -18,6 +18,7 @@ from polleria.models import (
     SaleItem,
     User,
 )
+from polleria.constants import BRANCHES
 from polleria.utils.money import round_money
 from polleria.utils.time import now_ar, start_of_day, today_ar
 
@@ -155,6 +156,7 @@ def _seed_demo(db) -> None:
                         is_quick=True,
                         metodo_pago=rng.choice(methods),
                         estado="completada",
+                        sucursal=rng.choice(BRANCHES),
                         observacion="Venta rápida de demostración",
                     )
                 )
@@ -174,6 +176,7 @@ def _seed_demo(db) -> None:
                 is_quick=False,
                 metodo_pago=rng.choice(methods),
                 estado="completada",
+                sucursal=rng.choice(BRANCHES),
             )
             db.add(sale)
             db.flush()
@@ -220,6 +223,7 @@ def _seed_demo(db) -> None:
                     monto=amounts.get(cat, 10000),
                     fecha=start_of_day(day).replace(hour=8),
                     metodo_pago=rng.choice(["Efectivo", "Transferencia"]),
+                    sucursal=rng.choice(BRANCHES),
                     usuario_id=admin.id,
                     observaciones="Dato de demo",
                 )
